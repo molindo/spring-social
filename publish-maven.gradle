@@ -58,3 +58,11 @@ def customizePom(pom, gradleProject) {
         }
     }
 }
+
+uploadArchives {
+    repositories.mavenDeployer {
+        def credentials = [userName: httpUser, password: httpPassword]
+        repository(url: 'https://oss.sonatype.org/service/local/staging/deploy/maven2/') { authentication(credentials) }
+        snapshotRepository(url: 'https://oss.sonatype.org/content/repositories/snapshots') { authentication(credentials) }
+    }
+}

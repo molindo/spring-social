@@ -12,7 +12,7 @@ configure(allprojects) {
     apply plugin: 'eclipse'
     apply plugin: 'idea'
 
-    group = 'org.springframework.social'
+    group = 'at.molindo.social'
 
     sourceCompatibility=1.5
     targetCompatibility=1.5
@@ -163,7 +163,7 @@ configure(rootProject) {
 
     dependencies { // for integration tests
     }
-    
+
     task api(type: Javadoc) {
         group = 'Documentation'
         description = 'Generates aggregated Javadoc API documentation.'
