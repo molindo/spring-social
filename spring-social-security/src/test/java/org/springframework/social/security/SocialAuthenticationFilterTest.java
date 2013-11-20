@@ -156,7 +156,7 @@ public class SocialAuthenticationFilterTest {
 		
 		when(connectionFactory.createConnection(data)).thenReturn(connection);
 		
-		Connection<?> addedConnection = filter.addConnection(authService, userId, data);
+		Connection<?> addedConnection = filter.addConnection(authService, userId, connection);
 		assertNotNull(addedConnection);
 		assertSame(connection, addedConnection);
 		
