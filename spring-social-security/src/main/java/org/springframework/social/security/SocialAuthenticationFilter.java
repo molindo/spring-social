@@ -15,6 +15,7 @@
  */
 package org.springframework.social.security;
 
+import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -24,7 +25,6 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
 import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -37,6 +37,7 @@ import org.springframework.security.web.authentication.SimpleUrlAuthenticationFa
 import org.springframework.social.UserIdSource;
 import org.springframework.social.connect.Connection;
 import org.springframework.social.connect.ConnectionData;
+import org.springframework.social.connect.ConnectionKey;
 import org.springframework.social.connect.ConnectionRepository;
 import org.springframework.social.connect.UsersConnectionRepository;
 import org.springframework.social.connect.web.ProviderSignInAttempt;
@@ -65,30 +66,19 @@ public class SocialAuthenticationFilter extends AbstractAuthenticationProcessing
 
 	private UsersConnectionRepository usersConnectionRepository;
 
-	private SimpleUrlAuthenticationFailureHandler delegateAuthenticationFailureHandler;
-
 	public SocialAuthenticationFilter(AuthenticationManager authManager, UserIdSource userIdSource, UsersConnectionRepository usersConnectionRepository, SocialAuthenticationServiceLocator authServiceLocator) {
 		super("/auth");
 		setAuthenticationManager(authManager);
 		this.userIdSource = userIdSource;
 		this.usersConnectionRepository = usersConnectionRepository;
 		this.authServiceLocator = authServiceLocator;
-		this.delegateAuthenticationFailureHandler = new SimpleUrlAuthenticationFailureHandler(DEFAULT_FAILURE_URL);
-		super.setAuthenticationFailureHandler(new SocialAuthenticationFailureHandler(delegateAuthenticationFailureHandler));
+		super.setAuthenticationFailureHandler(new SimpleUrlAuthenticationFailureHandler(DEFAULT_FAILURE_URL));
 	}
 	
 	public void setSignupUrl(String signupUrl) {
 		this.signupUrl = signupUrl;
 	}
 	
-	/**
-	 * The URL to redirect to if authentication fails or if authorization is denied by the user.
-	 * @param defaultFailureUrl The failure URL. Defaults to "/signin" (relative to the servlet context).
-	 */
-	public void setDefaultFailureUrl(String defaultFailureUrl) {
-		delegateAuthenticationFailureHandler.setDefaultFailureUrl(defaultFailureUrl);
-	}
-
 	public void setConnectionAddedRedirectUrl(String connectionAddedRedirectUrl) {
 		this.connectionAddedRedirectUrl = connectionAddedRedirectUrl;
 	}
@@ -133,17 +123,24 @@ public class SocialAuthenticationFilter extends AbstractAuthenticationProcessing
 			throw new SocialAuthenticationException("Authentication failed because user rejected authorization.");
 		}
 		
-		Authentication auth = null;
 		Set<String> authProviders = authServiceLocator.registeredAuthenticationProviderIds();
 		String authProviderId = getRequestedProviderId(request);
-		if (!authProviders.isEmpty() && authProviderId != null && authProviders.contains(authProviderId)) {
-			SocialAuthenticationService<?> authService = authServiceLocator.getAuthenticationService(authProviderId);
-			auth = attemptAuthService(authService, request, response);
-			if (auth == null) {
-				throw new AuthenticationServiceException("authentication failed");
-			}
-		}
-		return auth;
+		
+ 		if (!authProviders.isEmpty() && authProviderId != null && authProviders.contains(authProviderId)) {
+			try {
+				SocialAuthenticationService<?> authService = authServiceLocator.getAuthenticationService(authProviderId);
+				return attemptAuthService(authService, request, response);
+			} catch (SocialAuthenticationRedirectException redirect) {
+				try {
+					response.sendRedirect(redirect.getRedirectUrl());
+				} catch (IOException e) {
+					throw new SocialAuthenticationException("failed to send redirect from SocialAuthenticationRedirectException", e);
+				}
+				return null;
+ 			}
+		} else {
+			return null;
+ 		}
 	}
 
 	/**
@@ -176,21 +173,24 @@ public class SocialAuthenticationFilter extends AbstractAuthenticationProcessing
 		return false;
 	}
 
-	protected Connection<?> addConnection(SocialAuthenticationService<?> authService, String userId, ConnectionData data) {
+	protected Connection<?> addConnection(SocialAuthenticationService<?> authService, String userId, Connection<?> connection) {
+		ConnectionKey connectionKey = connection.getKey();
+		
 		HashSet<String> userIdSet = new HashSet<String>();
-		userIdSet.add(data.getProviderUserId());
-		Set<String> connectedUserIds = usersConnectionRepository.findUserIdsConnectedTo(data.getProviderId(), userIdSet);
+		userIdSet.add(connectionKey.getProviderUserId());
+		Set<String> connectedUserIds = usersConnectionRepository.findUserIdsConnectedTo(connectionKey.getProviderId(), userIdSet);
 		if (connectedUserIds.contains(userId)) {
-			// already connected
+			// providerUserId already connected to userId
 			return null;
 		} else if (!authService.getConnectionCardinality().isMultiUserId() && !connectedUserIds.isEmpty()) {
+			// providerUserId already connected to different userId and no multi user allowed
 			return null;
 		}
 
 		ConnectionRepository repo = usersConnectionRepository.createConnectionRepository(userId);
 
 		if (!authService.getConnectionCardinality().isMultiProviderUserId()) {
-			List<Connection<?>> connections = repo.findConnections(data.getProviderId());
+			List<Connection<?>> connections = repo.findConnections(connectionKey.getProviderId());
 			if (!connections.isEmpty()) {
 				// TODO maybe throw an exception to allow UI feedback?
 				return null;
@@ -198,8 +198,6 @@ public class SocialAuthenticationFilter extends AbstractAuthenticationProcessing
 		}
 
 		// add new connection
-		Connection<?> connection = authService.getConnectionFactory().createConnection(data);
-		connection.sync();
 		repo.addConnection(connection);
 		return connection;
 	}
@@ -262,10 +260,13 @@ public class SocialAuthenticationFilter extends AbstractAuthenticationProcessing
 	private void addConnection(final SocialAuthenticationService<?> authService, HttpServletRequest request, SocialAuthenticationToken token, Authentication auth) {
 		// already authenticated - add connection instead
 		String userId = userIdSource.getUserId();
-		Object principal = token.getPrincipal();
-		if (userId == null || !(principal instanceof ConnectionData)) return;
+		Connection<?> connection = token.getConnection();
+		if (userId == null || connection == null) {
+			logger.warn("can't add connection without userId or connection");
+			return;
+		}
 		
-		Connection<?> connection = addConnection(authService, userId, (ConnectionData) principal);
+		connection = addConnection(authService, userId, connection);
 		if(connection != null) {
 			String redirectUrl = authService.getConnectionAddedRedirectUrl(request, connection);
 			if (redirectUrl == null) {
