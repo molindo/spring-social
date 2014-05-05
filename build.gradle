@@ -15,7 +15,7 @@ ext.javaProjects = subprojects.findAll { project -> project.name != 'docs' && pr
 ext.coreModuleProjects = javaProjects
 
 configure(allprojects) {
-    group = "org.springframework.social"
+    group = "at.molindo.social"
 
 
 
